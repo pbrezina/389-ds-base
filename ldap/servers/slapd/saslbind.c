@@ -23,6 +23,9 @@
 #include <sasl/sasl.h>
 #include <sasl/saslplug.h>
 #include <unistd.h>
+#ifdef HAVE_KRB5
+#include <krb5.h>
+#endif
 
 static char *serverfqdn;
 
@@ -413,6 +416,35 @@ ids_sasl_canon_user(
                       "Unable to read SASL mechanism while canonifying user.\n");
         goto fail;
     }
+
+#ifdef HAVE_KRB5
+    if (mech && (strcasecmp(mech, "GSSAPI") == 0 || strcasecmp(mech, "GSS-SPNEGO") == 0)) {
+        krb5_context krb_ctx = NULL;
+        krb5_principal princ = NULL;
+        char localname[256];
+        char *fulluser = NULL;
+
+        if (user_realm && *user_realm) {
+            fulluser = slapi_ch_smprintf("%s@%s", user, user_realm);
+        } else {
+            fulluser = slapi_ch_strdup(user);
+        }
+
+        if (krb5_init_context(&krb_ctx) == 0) {
+            if (krb5_parse_name(krb_ctx, fulluser, &princ) == 0) {
+                if (krb5_aname_to_localname(krb_ctx, princ, sizeof(localname), localname) == 0) {
+                    slapi_log_err(SLAPI_LOG_CONNS, "ids_sasl_canon_user",
+                                  "Mapped principal %s to local name %s\n", fulluser, localname);
+                    slapi_ch_free_string(&user);
+                    user = slapi_ch_strdup(localname);
+                }
+                krb5_free_principal(krb_ctx, princ);
+            }
+            krb5_free_context(krb_ctx);
+        }
+        slapi_ch_free_string(&fulluser);
+    }
+#endif
 
     if (strncasecmp(user, "dn:", 3) == 0) {
         sdn = slapi_sdn_new();
